@@ -55,28 +55,158 @@ Before making changes, ensure you understand these concepts:
 
 Sink list (same as in **Project overview**): **{{ sinks_csv }}**. Implement stream-specific classes in `sinks.py`; shared HTTP and `authenticator` live in `client.py`.
 
-{% if "record" in sinks_csv %}
+### Implementing a Sink
 
+{% if "record" in sinks_csv %}
 #### Record sinks (`| record`)
 
-- Records are handled one at a time through the record sink base class.
-- Good for APIs, streaming-style loads, or when the destination expects single writes.
-- Implement logic in the record sink subclasses under `{{ cookiecutter.library_name }}/sinks.py` and shared HTTP behavior in `{{ cookiecutter.library_name }}/client.py`.
+Records are handled one at a time through `{{ cookiecutter.destination_name }}RecordSink` in `client.py`. Stream-specific subclasses in `sinks.py` inherit that base and override hooks as needed.
+
+**Flow:**
+
+```mermaid
+flowchart LR
+    A[Singer RECORD] --> B[preprocess_record]
+    B --> C[upsert_record]
+    C --> D[Destination API]
+```
+
+**Transformation vs. load:** Do **not** reshape the payload inside `upsert_record`. `preprocess_record` is defined on the parent record sink class — override it in your **sink subclass** in `sinks.py` to transform the record (field renames, types, nesting) before `upsert_record` runs.
+
+`upsert_record` should only perform the HTTP write using the already-transformed `record` (method, endpoint, request body). The scaffold in `client.py` shows a typical POST/PATCH pattern; override in a stream sink only when that stream’s API contract differs.
+
+```python
+# {{ cookiecutter.library_name }}/sinks.py
+class ContactsSink({{ cookiecutter.destination_name }}RecordSink):
+  name = "Contacts"
+
+  def preprocess_record(self, record: dict, context: dict) -> dict:
+    # Shape payload for the destination API before upsert_record runs.
+    return {
+      "first_name": record.get("firstName"),
+      "last_name": record.get("lastName"),
+      "email": record.get("email"),
+    }
+
+  # Optional: override upsert_record only for stream-specific HTTP behavior.
+  # def upsert_record(self, record: dict, context: dict) -> None:
+  #     ...
+```
+
+**Error handling and retries:** Raise SDK retryable errors for transient failures (timeouts, 429, 5xx). Use fatal errors for auth or schema issues. Let the SDK handle backoff where configured.
 
 {% endif %}
 {% if "batch" in sinks_csv %}
-
 #### Batch sinks (`| batch`)
 
-- Records are grouped into batches (up to `max_size`, often 10000) before processing.
-- Better throughput for bulk endpoints; higher memory use per batch.
-- Implement batch handling in the batch sink subclasses under `{{ cookiecutter.library_name }}/sinks.py`.
+Batch sinks group records (up to `max_size`) before a single API call. Per-record transformation uses **`process_batch_record`**, not `preprocess_record` (that hook is for record sinks only). See **Batching Logic** below.
 
-Important batch concepts:
+{% endif %}
 
-- `max_size`: Maximum records per batch
-- `context["records"]`: List of records in the current batch
+### Batching Logic
 
+{% if "batch" in sinks_csv %}
+Batch sinks extend `{{ cookiecutter.destination_name }}BatchSink` in `client.py`. Records accumulate until `max_size` (default often 10000) or the stream ends, then `process_batch` runs.
+
+**`max_size` guidance:**
+
+- Too small: excess API calls and lower throughput.
+- Too large: memory pressure, timeouts, and harder partial-failure handling.
+- Start around 1000–5000 and tune from record size and API limits.
+
+**Flow:**
+
+```mermaid
+flowchart LR
+    A[context records] --> B[process_batch_record per index]
+    B --> C[make_batch_request]
+    C --> D[Destination API]
+    D --> E[handle_batch_response]
+    E --> F[update_state per record]
+```
+
+1. Each raw row is passed through **`process_batch_record(record, index)`** in your sink subclass — override this to map Singer fields to the bulk payload shape.
+2. **`make_batch_request(records)`** sends the batch (override when the endpoint or envelope differs).
+3. **`handle_batch_response(response)`** is **required** on every batch sink. It parses the API response and returns `{"state_updates": [...]}` — one state dict per input record indicating success or failure (and optional `id`, `error`, `is_updated`, etc.). The base stub in `client.py` returns an empty list; **you must implement this** for real syncs.
+
+**Per-record transformation (`process_batch_record`):**
+
+```python
+# {{ cookiecutter.library_name }}/sinks.py
+class OrdersSink({{ cookiecutter.destination_name }}BatchSink):
+  name = "Orders"
+
+  def process_batch_record(self, record: dict, index: int) -> dict:
+    return {
+      "line_id": record.get("id"),
+      "qty": record.get("quantity"),
+      "sku": record.get("sku"),
+    }
+```
+
+**`handle_batch_response` — required; shape depends on the API**
+
+Return format (SDK contract):
+
+```python
+{"state_updates": [
+    {"externalId": "...", "success": True, "id": "dest-id"},
+    {"externalId": "...", "success": False, "error": "reason"},
+]}
+```
+
+**Pattern 1 — API returns a parallel `results` list (same order as request):**
+
+```python
+def handle_batch_response(self, response) -> dict:
+    body = response.json()
+    states = []
+    for item, result in zip(self._current_batch_external_ids, body["results"]):
+        states.append({
+            "externalId": item,
+            "success": result.get("status") == "ok",
+            "id": result.get("id"),
+            "error": result.get("message"),
+        })
+    return {"state_updates": states}
+```
+
+**Pattern 2 — API returns only created IDs in order (implicit success):**
+
+```python
+def handle_batch_response(self, response) -> dict:
+    ids = response.json().get("created_ids", [])
+    states = []
+    for external_id, dest_id in zip(self._current_batch_external_ids, ids):
+        states.append({"externalId": external_id, "success": True, "id": dest_id})
+    # Mark any trailing records without a matching id as failed
+    for external_id in self._current_batch_external_ids[len(ids):]:
+        states.append({"externalId": external_id, "success": False, "error": "No id returned"})
+    return {"state_updates": states}
+```
+
+**Pattern 3 — API returns error indices or a partial summary:**
+
+```python
+def handle_batch_response(self, response) -> dict:
+    body = response.json()
+    failed_indexes = {e["index"] for e in body.get("errors", [])}
+    states = []
+    for index, external_id in enumerate(self._current_batch_external_ids):
+        if index in failed_indexes:
+            err = next(e for e in body["errors"] if e["index"] == index)
+            states.append({"externalId": external_id, "success": False, "error": err["message"]})
+        else:
+            states.append({"externalId": external_id, "success": True})
+    return {"state_updates": states}
+```
+
+Store correlation data (e.g. `externalId` per row) in `make_batch_request` or `process_batch` if the response does not echo source keys.
+
+**Error handling and retries:** Treat the whole batch request as retryable on transient HTTP failures. Use `handle_batch_response` to mark per-record failures when the API returns 200 with partial errors. Do not swallow per-record errors — every row needs a `state_updates` entry.
+
+{% else %}
+This project was generated without batch sinks. To add batching, extend the cookiecutter `sinks` prompt with entries such as `Orders | batch` and implement `{{ cookiecutter.destination_name }}BatchSink` subclasses in `sinks.py`.
 {% endif %}
 
 ### Cookiecutter context (this repo)
@@ -96,7 +226,7 @@ When editing the **template** upstream, mirror changes in `cookiecutter.json`, `
 #### Modifying Data Loading Logic
 
 1. Override sink methods in `{{ cookiecutter.library_name }}/sinks.py`
-1. Add data transformation in pre-processing
+1. Record sinks: transform in `preprocess_record`; batch sinks: transform in `process_batch_record`
 1. Handle destination-specific formatting
 1. Implement error handling and retries
 
@@ -163,10 +293,10 @@ Types of errors:
 
 
 ```python
-def prepare_record(self, record: dict) -> dict:
-    """Convert types for destination."""
+def preprocess_record(self, record: dict, context: dict) -> dict:
+    """Convert types for destination (record sinks only)."""
     if "timestamp" in record:
-        record["timestamp"] = parse_datetime(record["timestamp"])
+        record = {**record, "timestamp": parse_datetime(record["timestamp"])}
     return record
 ```
 

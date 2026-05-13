@@ -20,9 +20,6 @@ if __name__ == "__main__":
         Path("LICENSE-Apache-2.0").unlink()
         Path("LICENSE-MIT").unlink()
 
-    if "{{ cookiecutter.ide | default('VSCode') }}" != "VSCode":
-        shutil.rmtree(".vscode", ignore_errors=True)
-
     # OAuth-only module: remove auth.py when not using OAuth2
     if AUTH_METHOD != "OAuth2":
         (BASE_PATH / "auth.py").unlink(missing_ok=True)
