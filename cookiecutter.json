@@ -1,0 +1,24 @@
+{
+  "destination_name": "MyDestinationName",
+  "admin_name": "FirstName LastName",
+  "admin_email": "firstname.lastname@example.com",
+  "target_id": "target-{{ cookiecutter.destination_name.lower() }}",
+  "library_name": "{{ cookiecutter.target_id.replace('-', '_') }}",
+  "include_agent_instructions": ["AGENTS.md", "CLAUDE.md", "None"],
+  "license": ["Apache-2.0", "MIT", "None"],
+  "base_url": "https://myapi.com/api/v1",
+  "auth_method": ["Bearer Token", "Basic Auth", "API Key", "OAuth2"],
+  "sinks": "Fallback | record",
+  "__prompts__": {
+    "destination_name": "The name of the destination, in CamelCase (e.g., 'MyDestination'). [bold red]Must be a valid Python identifier[/] - use letters and numbers only, no hyphens, spaces, or special characters. This will be used for Python class names.",
+    "admin_name": "Provide your [bold yellow]full name[/]",
+    "admin_email": "Provide your [bold yellow]email[/]",
+    "target_id": "The ID of the target, in kebab-case (e.g., 'target-mydestination')",
+    "library_name": "The name of the library, in snake_case (e.g., 'target_mydestination'). This is how the library will be imported in Python.",
+    "include_agent_instructions": "Include an agent instructions file? AGENTS.md is the cross-tool standard; CLAUDE.md is specific to Claude Code.",
+    "license": "The license for the project",
+    "base_url": "The base URL of the API",
+    "auth_method": "Authentication style: Bearer Token, Basic Auth, API Key, or OAuth2 (drives client authenticators, sample `.secrets/config.json`, and whether `auth.py` is kept after generation).",
+    "sinks": "Comma-separated sinks: each must be `StreamName | record` or `StreamName | batch`. StreamName must be a valid Python identifier (letters, digits, underscores only; no spaces or punctuation). Invalid or empty input falls back to `Fallback | record`. Example: `Contacts | record, Accounts | batch`"
+  }
+}
