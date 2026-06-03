@@ -1,0 +1,7 @@
+tests:
+  - destination_name: TargetBatchSinkTest
+    target_id: target-batchsink-test
+    sinks: "Widget | batch"
+  - destination_name: TargetRecordSinkTest
+    target_id: target-recordsink-test
+    sinks: "Widget | record"
