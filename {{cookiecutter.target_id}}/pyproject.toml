@@ -23,7 +23,7 @@ license = "{{cookiecutter.license}}"
 license-files = [ "LICENSE" ]
 requires-python = ">=3.10"
 dependencies = [
-    "hotglue-singer-sdk @ git+https://github.com/hotgluexyz/HotglueSingerSDK.git@hgi-10250"
+    "hotglue-singer-sdk @ git+https://github.com/hotgluexyz/HotglueSingerSDK.git@v1.0.34"
 ]
 
 [project.optional-dependencies]
