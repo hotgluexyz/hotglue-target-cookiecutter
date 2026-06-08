@@ -2,7 +2,7 @@
 
 Cookiecutter template for a [Hotglue Singer SDK](https://github.com/hotgluexyz/HotglueSingerSDK) HTTP target (`TargetHotglue`, record/batch sinks, SDK authenticators).
 
-It renders `{{cookiecutter.target_id}}/` into a full Python package: `target.py`, `client.py`, `sinks.py`, optional `auth.py`, tests, and tooling (`ruff`, `tox`, `uv`).
+It renders `{{cookiecutter.target_id}}/` into a full Python package: `target.py`, `client.py`, `sinks.py`, optional `auth.py`, tests, uv-based packaging, and ruff linting.
 
 ## Quick start
 
